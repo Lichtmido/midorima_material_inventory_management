@@ -92,9 +92,13 @@ if 'last_item' not in st.session_state:
 # 1. 在庫サマリー表示
 st.subheader("現在の在庫状況")
 inv = get_inventory()
-cols = st.columns(5)
+
+# colsを使わず、コンテナの中で順番に並べる（スマホでも順番が崩れない）
+grid_cols = st.columns(5)
 for i, item in enumerate(ITEMS):
-    cols[i % 5].metric(label=item, value=f"{inv[item]} 個")
+    # 余り計算（%）を使って、常に 1, 2, 3, 4, 5... の順で各列に配置する
+    with grid_cols[i % 5]:
+        st.metric(label=item, value=f"{inv[item]} 個")
 
 st.divider()
 
