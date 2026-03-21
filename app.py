@@ -1,22 +1,57 @@
 import streamlit as st
 import pandas as pd
+import base64
+import requests
 from datetime import datetime
-from streamlit_gsheets import GSheetsConnection
+from io import StringIO
 
 # --- 設定 ---
 ITEMS = ["銅", "鉄", "鋼鉄", "アルミニウム", "アルミニウム粉末", "メタルスクラップ", "プラスチック", "ガラス", "ゴム", "クリプトスティック"]
 USERS = ["緑間理人", "緑間きのこ"]
 
-# --- データ管理関数 (Google Sheets対応) ---
-# Secretsに設定した[connections.gsheets]を参照します
-conn = st.connection("gsheets", type=GSheetsConnection)
+# GitHub連携情報
+GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+GITHUB_REPO = st.secrets["GITHUB_REPO"]
+GITHUB_FILE = st.secrets["GITHUB_FILE"]
+
+# --- データ管理関数 (GitHub対応版) ---
+def get_github_data():
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    res = requests.get(url, headers=headers)
+    
+    if res.status_code == 200:
+        content = res.json()
+        csv_data = base64.b64decode(content['content']).decode('utf-8-sig')
+        df = pd.read_csv(StringIO(csv_data))
+        return df, content['sha']
+    else:
+        # ファイルが存在しない場合は初期ヘッダーで作成
+        df_empty = pd.DataFrame(columns=['日時', '担当者', 'アイテム', 'アクション', '数量'])
+        return df_empty, None
+
+def save_to_github(df, sha):
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+    csv_content = df.to_csv(index=False, encoding='utf-8-sig')
+    
+    data = {
+        "message": f"Inventory Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "content": base64.b64encode(csv_content.encode('utf-8-sig')).decode('utf-8'),
+    }
+    if sha:
+        data["sha"] = sha
+        
+    res = requests.put(url, headers=headers, json=data)
+    if res.status_code not in [200, 201]:
+        st.error(f"GitHub保存エラー: {res.json().get('message')}")
 
 def load_data():
-    # スプレッドシートから全データを取得
-    return conn.read(ttl=0) # ttl=0でキャッシュを無効にして最新を取得
+    df, _ = get_github_data()
+    return df
 
 def save_data(user, item, action, amount):
-    df = load_data()
+    df, sha = get_github_data()
     new_data = {
         '日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         '担当者': user,
@@ -24,16 +59,13 @@ def save_data(user, item, action, amount):
         'アクション': action,
         '数量': amount
     }
-    # 新しいデータを追加
     df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-    # スプレッドシートを更新
-    conn.update(data=df)
+    save_to_github(df, sha)
 
 def delete_row(index):
-    df = load_data()
+    df, sha = get_github_data()
     df = df.drop(index)
-    # 行を削除した状態でスプレッドシートを更新
-    conn.update(data=df)
+    save_to_github(df, sha)
 
 def get_inventory():
     df = load_data()
@@ -102,7 +134,6 @@ df_history = load_data()
 if df_history.empty:
     st.info("履歴はまだありません。")
 else:
-    # 履歴を逆順にして最新を表示
     df_recent = df_history.iloc[::-1].head(20)
     last_5_indices = df_history.index[-5:]
     
