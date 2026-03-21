@@ -26,7 +26,6 @@ def get_github_data():
         df = pd.read_csv(StringIO(csv_data))
         return df, content['sha']
     else:
-        # ファイルが存在しない場合は初期ヘッダーで作成
         df_empty = pd.DataFrame(columns=['日時', '担当者', 'アイテム', 'アクション', '数量'])
         return df_empty, None
 
@@ -67,11 +66,18 @@ def delete_row(index):
     df = df.drop(index)
     save_to_github(df, sha)
 
-def get_inventory():
+# 修正：フィルタリング対応の在庫集計関数
+def get_inventory(filter_user=None):
     df = load_data()
     inventory = {item: 0 for item in ITEMS}
     if not df.empty:
-        for _, row in df.iterrows():
+        # 特定の担当者でフィルタリング
+        if filter_user:
+            target_df = df[df['担当者'] == filter_user]
+        else:
+            target_df = df
+            
+        for _, row in target_df.iterrows():
             if row['アイテム'] in inventory:
                 if row['アクション'] == '入手':
                     inventory[row['アイテム']] += row['数量']
@@ -89,14 +95,22 @@ if 'last_user' not in st.session_state:
 if 'last_item' not in st.session_state:
     st.session_state.last_item = ITEMS[0]
 
-# 1. 在庫サマリー表示
-st.subheader("現在の在庫状況")
-inv = get_inventory()
+# --- 追記：表示モードの切り替え ---
+view_mode = st.radio("表示モード", ["合計在庫", "緑間理人の入手分", "緑間きのこの入手分"], horizontal=True)
 
-# 5個ずつに区切って表示する
+if view_mode == "緑間理人の入手分":
+    inv = get_inventory(filter_user="緑間理人")
+    st.subheader("📊 緑間理人の現在の所持・入手状況")
+elif view_mode == "緑間きのこの入手分":
+    inv = get_inventory(filter_user="緑間きのこ")
+    st.subheader("📊 緑間きのこの現在の所持・入手状況")
+else:
+    inv = get_inventory()
+    st.subheader("📊 現在の総在庫状況")
+
+# 1. 在庫サマリー表示
 for i in range(0, len(ITEMS), 5):
     cols = st.columns(5)
-    # この5つの列に対して、順番にアイテムを入れていく
     for j in range(5):
         if i + j < len(ITEMS):
             item = ITEMS[i + j]
@@ -122,8 +136,10 @@ with st.form("input_form"):
     submit_button = st.form_submit_button("記録を保存する")
 
     if submit_button:
-        if action_input == "売却" and inv[item_input] < amount_input:
-            st.error(f"エラー：{item_input} の在庫が不足しています（現在：{inv[item_input]}個）")
+        # 在庫チェックは「合計在庫」で行う必要があるためフィルタなしで取得
+        current_total_inv = get_inventory()
+        if action_input == "売却" and current_total_inv[item_input] < amount_input:
+            st.error(f"エラー：全体在庫の {item_input} が不足しています（現在：{current_total_inv[item_input]}個）")
         else:
             save_data(user_input, item_input, action_input, amount_input)
             st.session_state.last_user = user_input
