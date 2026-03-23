@@ -61,17 +61,30 @@ def save_data(user, item, action, amount):
     df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
     save_to_github(df, sha)
 
+# 追記：一括保存用
+def save_bulk_data(user, cart_items):
+    df, sha = get_github_data()
+    rows = []
+    for item in cart_items:
+        rows.append({
+            '日時': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            '担当者': user,
+            'アイテム': item['name'],
+            'アクション': item['action'],
+            '数量': item['amount']
+        })
+    df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
+    save_to_github(df, sha)
+
 def delete_row(index):
     df, sha = get_github_data()
     df = df.drop(index)
     save_to_github(df, sha)
 
-# 修正：フィルタリング対応の在庫集計関数
 def get_inventory(filter_user=None):
     df = load_data()
     inventory = {item: 0 for item in ITEMS}
     if not df.empty:
-        # 特定の担当者でフィルタリング
         if filter_user:
             target_df = df[df['担当者'] == filter_user]
         else:
@@ -87,15 +100,91 @@ def get_inventory(filter_user=None):
 
 # --- UI構成 ---
 st.set_page_config(page_title="緑間素材店トランク内在庫管理", layout="wide")
-st.title("📦 緑間素材店リサセン素材在庫管理")
+st.title("📦 緑間素材店 在庫管理 & 複数査定システム")
 
 # セッション状態の初期化
 if 'last_user' not in st.session_state:
     st.session_state.last_user = USERS[0]
 if 'last_item' not in st.session_state:
     st.session_state.last_item = ITEMS[0]
+if 'cart' not in st.session_state:
+    st.session_state.cart = []
 
-# --- 追記：表示モードの切り替え ---
+# 現在の総在庫を取得
+total_inv = get_inventory()
+
+# --- 🆕 追加：マルチ査定カートセクション ---
+st.header("⚖️ 販売・買取 マルチ査定カート")
+with st.container(border=True):
+    calc_col1, calc_col2, calc_col3, calc_col4 = st.columns([1.5, 2, 2, 2])
+    with calc_col1:
+        trade_mode = st.radio("取引種別", ["販売(売却)", "買取(入手)"], horizontal=False, key="trade_mode")
+    with calc_col2:
+        calc_item = st.selectbox("査定アイテム", ITEMS, key="calc_item")
+        st.caption(f"現在の総在庫: {total_inv[calc_item]} 個")
+    with calc_col3:
+        market_price = st.number_input("単価 (円)", min_value=0, value=1000, step=100, key="market_price")
+    with calc_col4:
+        calc_amount = st.number_input("数量", min_value=1, value=1, step=1, key="calc_amount")
+
+    if st.button("➕ カートに追加"):
+        # 在庫チェック（販売時のみ）
+        action_label = "売却" if trade_mode == "販売(売却)" else "入手"
+        already_in_cart = sum(item['amount'] for item in st.session_state.cart if item['name'] == calc_item and item['action'] == "売却")
+        
+        if action_label == "売却" and total_inv[calc_item] < (calc_amount + already_in_cart):
+            st.error(f"在庫不足です！ (トランク残量: {total_inv[calc_item]}個)")
+        else:
+            st.session_state.cart.append({
+                "name": calc_item,
+                "price": market_price,
+                "amount": calc_amount,
+                "subtotal": market_price * calc_amount,
+                "action": action_label
+            })
+            st.toast(f"{calc_item} をカートに追加しました")
+
+# カートの中身表示
+if st.session_state.cart:
+    total_bill = 0
+    receipt_details = []
+    
+    st.subheader("📝 査定リスト")
+    for i, item in enumerate(st.session_state.cart):
+        c_a, c_b, c_c, c_d, c_e = st.columns([2, 2, 2, 2, 0.5])
+        c_a.write(f"**{item['name']}** ({item['action']})")
+        c_b.write(f"{item['price']:,} 円 × {item['amount']}個")
+        c_c.write(f"小計: {item['subtotal']:,} 円")
+        total_bill += item['subtotal']
+        receipt_details.append(f"{item['name']}x{item['amount']}(@{item['price']:,})")
+        if c_e.button("🗑️", key=f"cart_rm_{i}"):
+            st.session_state.cart.pop(i)
+            st.rerun()
+    
+    st.divider()
+    st.markdown(f"### 💰 合計金額: **{total_bill:,} 円**")
+    
+    # コピー用テキスト
+    full_receipt = f"【緑間素材店 査定】合計:{total_bill:,}円 / 内訳:" + " | ".join(receipt_details)
+    st.text_input("チャット用コピー", value=full_receipt)
+    
+    # 一括反映
+    res_user = st.radio("取引担当者", USERS, horizontal=True, key="res_user")
+    col_f1, col_f2 = st.columns([1, 4])
+    if col_f1.button("🚀 取引確定・在庫反映"):
+        save_bulk_data(res_user, st.session_state.cart)
+        st.session_state.cart = []
+        st.success("一括保存しました！")
+        st.rerun()
+    if col_f2.button("🛒 カートを空にする"):
+        st.session_state.cart = []
+        st.rerun()
+else:
+    st.info("査定カートは空です。上のフォームからアイテムを追加してください。")
+
+st.divider()
+
+# --- 既存の在庫表示セクション ---
 view_mode = st.radio("表示モード", ["合計在庫", "緑間理人の入手分", "緑間きのこの入手分"], horizontal=True)
 
 if view_mode == "緑間理人の入手分":
@@ -105,7 +194,7 @@ elif view_mode == "緑間きのこの入手分":
     inv = get_inventory(filter_user="緑間きのこ")
     st.subheader("📊 緑間きのこの現在の所持・入手状況")
 else:
-    inv = get_inventory()
+    inv = total_inv
     st.subheader("📊 現在の総在庫状況")
 
 # 1. 在庫サマリー表示
@@ -118,25 +207,24 @@ for i in range(0, len(ITEMS), 5):
 
 st.divider()
 
-# 2. 入力フォーム
-st.subheader("新規記録")
+# 2. 既存の新規記録（手動調整用）
+st.subheader("新規記録 (手動調整)")
 with st.form("input_form"):
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         user_idx = USERS.index(st.session_state.last_user)
-        user_input = st.selectbox("担当者", USERS, index=user_idx)
+        user_input = st.selectbox("担当者", USERS, index=user_idx, key="manual_user")
     with col2:
         item_idx = ITEMS.index(st.session_state.last_item)
-        item_input = st.selectbox("アイテム", ITEMS, index=item_idx)
+        item_input = st.selectbox("アイテム", ITEMS, index=item_idx, key="manual_item")
     with col3:
-        action_input = st.radio("アクション", ["入手", "売却"], horizontal=True)
+        action_input = st.radio("アクション", ["入手", "売却"], horizontal=True, key="manual_action")
     with col4:
-        amount_input = st.number_input("数量", min_value=1, step=1, value=1)
+        amount_input = st.number_input("数量", min_value=1, step=1, value=1, key="manual_amount")
     
     submit_button = st.form_submit_button("記録を保存する")
 
     if submit_button:
-        # 在庫チェックは「合計在庫」で行う必要があるためフィルタなしで取得
         current_total_inv = get_inventory()
         if action_input == "売却" and current_total_inv[item_input] < amount_input:
             st.error(f"エラー：全体在庫の {item_input} が不足しています（現在：{current_total_inv[item_input]}個）")
