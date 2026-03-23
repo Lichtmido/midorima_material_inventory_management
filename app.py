@@ -149,7 +149,8 @@ st.header("⚖️ 販売・買取 査定システム")
 # --- 一括単価反映機能 ---
 with st.expander("💰 単価の一括設定"):
     st.info("アイテム,単価 の形式で貼り付けてください (例: 銅,2000)")
-    bulk_price_text = st.text_area("一括入力エリア", height=150)
+    # 貼り付け用のエリア
+    bulk_price_text = st.text_area("一括入力エリア", height=150, placeholder="銅,2000\n鉄,3000...")
     if st.button("単価を反映する"):
         updated_prices = st.session_state.prices.copy()
         for line in bulk_price_text.split('\n'):
@@ -159,7 +160,7 @@ with st.expander("💰 単価の一括設定"):
                 if name in ITEMS and price.isdigit():
                     updated_prices[name] = int(price)
         st.session_state.prices = updated_prices
-        st.success("単価リストを更新しました！")
+        st.success("単価リストを更新しました！査定フォームに反映されます。")
 
 # --- カート入力 ---
 with st.container(border=True):
@@ -168,10 +169,16 @@ with st.container(border=True):
         trade_mode = st.radio("取引種別", ["販売(売却)", "買取(入手)"], horizontal=False, key="trade_mode")
     with calc_col2:
         calc_item = st.selectbox("査定アイテム", ITEMS, key="calc_item")
-        st.caption(f"トランク在庫: {total_inv[calc_item]} 個 / 現在設定単価: {st.session_state.prices[calc_item]:,}円")
+        st.caption(f"トランク在庫: {total_inv[calc_item]} 個 / 現在の設定単価: {st.session_state.prices[calc_item]:,}円")
     with calc_col3:
-        # 一括設定された単価をデフォルト値として表示
-        m_price = st.number_input("単価 (円)", min_value=0, value=st.session_state.prices[calc_item], step=100, key="m_price")
+        # ポイント：keyをアイテム名連動にすることで、アイテム切り替え時に設定単価を再読み込みさせる
+        m_price = st.number_input(
+            "単価 (円)", 
+            min_value=0, 
+            value=st.session_state.prices[calc_item], 
+            step=100, 
+            key=f"price_input_{calc_item}" 
+        )
     with calc_col4:
         c_amount = st.number_input("数量", min_value=1, value=1, step=1, key="c_amount")
 
@@ -181,7 +188,13 @@ with st.container(border=True):
         if act_label == "売却" and total_inv[calc_item] < (c_amount + already_in):
             st.error("在庫不足です！")
         else:
-            st.session_state.cart.append({"name": calc_item, "price": m_price, "amount": c_amount, "subtotal": m_price * c_amount, "action": act_label})
+            st.session_state.cart.append({
+                "name": calc_item, 
+                "price": m_price, 
+                "amount": c_amount, 
+                "subtotal": m_price * c_amount, 
+                "action": act_label
+            })
             st.rerun()
 
 # カート表示
@@ -208,7 +221,7 @@ if st.session_state.cart:
 st.divider()
 
 # ==========================================
-# 4. 履歴表示 (以前のまま)
+# 4. 履歴表示
 # ==========================================
 st.subheader("📜 最近の在庫変動履歴（直近20件）")
 df_history = load_data()
